@@ -13,6 +13,8 @@ import { loadConfig, statusKeyAllowed, RUN_DIR, VERSION, diskVersion, validateCr
 import { resolveTerminal } from "./terminals.mjs";
 import { WeComTransport, MAX_ATTACHMENT_BYTES } from "./wecom.mjs";
 import { loadAliases } from "./aliases.mjs";
+import { artAllowed, scanArtifacts as scanSessionArtifacts } from "./artifacts.mjs";
+import { readLastTurn } from "./recap.mjs";
 const CFG = loadConfig();
 validateCredentials(CFG);
 let transport;
@@ -1687,7 +1689,7 @@ function abortRejected(t, run, o) {
         : "终端拒绝了中断（可能已空闲，或正在跑的不是这一轮）。请到电脑上查看。";
     void trackedPush(plainText({ head: "⚠️ 中断未生效", subject: t.label(), body, foot: "发送 `状态` 查看" }));
 }
-const COMMANDS = new Set(["ls", "h", "n", "nb", "stop", "status", "help", "model", "cd", "think", "compact", "restart", "art", "remote", "mute"]);
+const COMMANDS = new Set(["ls", "h", "n", "nb", "stop", "status", "help", "model", "cd", "think", "compact", "restart", "art", "remote", "mute", "recap"]);
 const NL_ALIASES = [
     ["帮助", "help", false],
     ["活跃会话", "ls", false],
@@ -1715,6 +1717,7 @@ const NL_ALIASES = [
     ["重启", "restart", true],
     ["产物", "art", false],
     ["查看产物", "art", false],
+    ["回顾", "recap", false],
     ["关注", "remote", false],
     ["取消关注", "mute", false],
     ["取关", "mute", false],
@@ -1770,6 +1773,7 @@ const helpText = () => [
     "| think | 思考强度 |",
     "| cd | 目录 |",
     "| compact | 压缩 |",
+    "| recap | 回顾 |",
     "| status | 状态 |",
     "| stop | 停止 |",
     "| help | 帮助 |",
@@ -1780,18 +1784,11 @@ const helpText = () => [
     "**Tips**",
     "",
     "> 1. 电脑端 `/remote` 配置",
-    "> 2. 电脑端 `/tabmodel` 自动命名会话",
-    "> 3. 先发附件，5 分钟内补文字一并发送",
+    "> 2. 先发附件，5 分钟内补文字一并发送",
+    "> 3. 引用消息，可发送回复给相应会话",
 ].join("\n");
 
-async function resolveNumber(n) {
-    if (!numMap.length)
-        await buildList();
-    const t = numMap[n - 1];
-    if (!t)
-        return null;
-    if (t.kind !== "history")
-        return t;
+async function openHistory(t) {
     log(`spawn history target ${path.basename(t.sessionFile)}`);
     const rt = new RpcTarget({ cwd: t.cwd, name: t.name, sessionFile: t.sessionFile });
     targets.set(rt.key, rt);
@@ -1803,6 +1800,19 @@ async function resolveNumber(n) {
         rt.close();
         return { failed: plainText({ head: "⚠️ 打开历史会话失败", subject: clip(t.name || t.hint || "会话", 40), body: `原因：${String(e?.message || e).slice(0, 100)}` }) };
     }
+    return rt;
+}
+async function resolveNumber(n) {
+    if (!numMap.length)
+        await buildList();
+    const t = numMap[n - 1];
+    if (!t)
+        return null;
+    if (t.kind !== "history")
+        return t;
+    const rt = await openHistory(t);
+    if (rt.failed)
+        return rt;
     const i = numMap.findIndex((x) => x.key === t.key);
     if (i >= 0)
         numMap[i] = rt;
@@ -2128,7 +2138,7 @@ function remoteAll() {
     }
     const cur = currentTarget();
     if (!rows.length) {
-        return plainText({ head: "📌 关注", body: "没有运行中的终端会话。", foot: "发送 `活跃会话` 选择" });
+        return plainText({ head: "📌 关注", body: "目前没有运行中的任务。", foot: "发送 `活跃会话` 选择" });
     }
     const lines = rows.map((t) => {
         const r = pendingRun(t);
@@ -2165,17 +2175,44 @@ function muteAll() {
         foot: "发送 `关注` 恢复",
     });
 }
-/** 引用了一条「图标 状态 · 会话名」的推送：按会话名找到唯一的存活会话，找不到或重名就按当前会话处理。 */
-function quotedTarget(quote) {
+/**
+ * 引用了一条「图标 状态 · 会话名」的推送：先在存活会话里按会话名找，没有再到历史会话里找并重新打开（重启后后台会话已退出）。
+ * 返回 {target} 命中；{failed} 打开失败；{missed: 会话名} 认得出是推送引用，但找不到或重名；null 不是推送引用。
+ */
+async function quotedTarget(quote) {
     const line = String(quote || "").split("\n", 1)[0].trim();
     const m = /^\S+ [^·]+? · (.+)$/.exec(line);
     if (!m)
         return null;
     const name = m[1].trim();
-    const hits = [...targets.values()].filter((t) => t.kind !== "history" && (t.kind !== "tui" || t.alive) && clipWidth(t.label(), 32) === name);
-    if (hits.length > 1)
-        log(`引用的会话名对应 ${hits.length} 个会话，按当前会话处理`);
-    return hits.length === 1 ? hits[0] : null;
+    const same = (t) => clipWidth(t.label(), 32) === name;
+    const hits = [...targets.values()].filter((t) => liveTarget(t) && same(t));
+    if (hits.length === 1)
+        return { target: hits[0] };
+    if (hits.length > 1) {
+        log(`引用的会话名对应 ${hits.length} 个会话 name=${JSON.stringify(name)}`);
+        return { missed: name };
+    }
+    // 借用历史检索，但不能打乱用户手上那张列表的编号。
+    const keep = { numMap, histStat };
+    let old = [];
+    try {
+        old = histRows(await buildList({ find: name })).filter(same);
+    }
+    catch (e) {
+        log(`引用查找历史会话失败 ${e?.message || e}`);
+    }
+    finally {
+        numMap = keep.numMap;
+        histStat = keep.histStat;
+    }
+    if (old.length !== 1) {
+        log(`引用的会话${old.length ? `名对应 ${old.length} 个历史会话` : "已不在"} name=${JSON.stringify(name)}`);
+        return { missed: name };
+    }
+    log(`引用的会话已退出，从历史重新打开 name=${JSON.stringify(name)}`);
+    const t = await openHistory(old[0]);
+    return t.failed ? { failed: t.failed } : { target: t };
 }
 const durLabel = (ms) => (ms >= 60000 ? `${Math.round(ms / 60000)} 分钟` : `${Math.max(1, Math.round(ms / 1000))} 秒`);
 // 弹窗内容放进代码块：避免 `$...$` 被企微渲染成公式、Markdown 符号被解释。
@@ -2389,6 +2426,7 @@ async function footerInfo(t) {
     const stats = t.kind === "rpc" ? s : null;
     const lines = [
         `目录：${dirLabel(t.cwd)}`,
+        `类型：${kindOf(t)}`,
         `模型：${t.model || "未知"}${t.thinkingLevel ? ` · ${t.thinkingLevel}` : ""}`,
         `上下文：${contextLabel(t, stats)}${t.cost > 0 ? ` · 花费 $${t.cost.toFixed(3)}` : ""}`,
     ];
@@ -2397,13 +2435,35 @@ async function footerInfo(t) {
         lines.push(`附加信息：${statuses.join(" ｜ ")}`);
     return lines;
 }
-async function statusCard() {
-    const t = currentTarget();
+/** 除当前会话外还有运行中的会话时，先用卡片选看哪个；否则直接回当前会话的状态。 */
+function statusPick() {
+    const cur = currentTarget();
+    const running = [...targets.values()].filter((t) => t !== cur && t.busy && liveTarget(t)).sort((a, b) => b.lastActivity - a.lastActivity);
+    const rows = [...(cur ? [cur] : []), ...running];
+    if (rows.length < 2)
+        return statusCard(rows[0]);
+    const card = {
+        card_type: "vote_interaction",
+        title: "📊 查看状态",
+        desc: `运行中 ${rows.filter((t) => t.busy).length} 个 · 选择要查看的会话`,
+        options: rows.slice(0, VOTE_OPT_MAX).map((t) => ({ id: registerPick({ act: "status", targetKey: t.key, sessionId: t.sessionId }), text: optText(t) })),
+        mode: 0,
+        submit_text: "查看状态",
+        task_id: taskId("status"),
+    };
+    return cardBlock(card, PICK_LEAD, () => plainText({
+        head: "⚠️ 卡片发送失败",
+        subject: "查看状态",
+        body: rows.map((t) => `- ${optText(t)}`).join("\n"),
+        foot: "发送 `活跃会话` 切换后，再发 `状态` 查看",
+    }));
+}
+async function statusCard(t = currentTarget()) {
     if (!t)
         return NO_BIND();
     const info = (await footerInfo(t)).map((l) => `- ${l}`).join("\n");
-    const kind = kindOf(t);
     const tunnel = transport.connected ? [] : ["企微：断开"];
+    const stopHint = t === currentTarget() ? "发送 `停止` 停止" : "引用消息，回复会发给该会话";
     if (t.busy) {
         const r = pendingRun(t) || t.run;
         const stopping = r.stopRequestedAt
@@ -2413,20 +2473,20 @@ async function statusCard() {
             head: "⏳ 运行中",
             subject: t.label(),
             body: `已运行 ${human(Date.now() - r.startedAt)}${r.tool ? `，当前动作：${toolLabel(r.tool)}` : ""}。${stopping}\n\n${info}`,
-            foot: [`类型：${kind}`, ...tunnel, ...mutedFoot(), ...updateFoot(), "发送 `停止` 停止"].join(" · "),
+            foot: [...tunnel, ...mutedFoot(), ...updateFoot(), stopHint].join(" · "),
         });
     }
     return plainText({
         head: "🧊 空闲",
         subject: t.label(),
         body: `等你发消息，上次活动 ${ago(t.lastActivity)}。\n\n${info}`,
-        foot: [`类型：${kind}`, ...tunnel, ...mutedFoot(), ...updateFoot()].join(" · "),
+        foot: [...tunnel, ...mutedFoot(), ...updateFoot()].join(" · "),
     });
 }
 const mutedFoot = () => (muted ? ["已取关：电脑任务不推送"] : []);
 const updateFoot = () => {
     const next = diskVersion();
-    return next !== VERSION ? [`新版本 v${next}，发送 \`重启\` 生效`] : [];
+    return next !== VERSION ? [`Pi Remote 新版本 v${next}，发送 \`重启\` 生效`] : [];
 };
 // ---- 默认目录：只影响之后新建的会话（`创建会话` 不带目录时），已有会话不动 ----
 const DEFAULT_DIR_FILE = path.join(DIR, ".default-dir");
@@ -2509,85 +2569,46 @@ function buildDirCard(arg) {
         foot: "发送 `目录 别名` 直接切换",
     }));
 }
-// ---- 会话产物：从会话 jsonl 的 write 调用增量提取，by session 维度 ----
-const ART_EXT = new Set([".html", ".htm", ".md", ".pdf", ".docx", ".xlsx", ".pptx", ".png", ".svg"]);
+// ---- 回顾：当前分支上最近一轮已结束的对话，规则见 recap.mjs ----
+const RECAP_TIP = "发送「回顾」，查看上一轮内容";
+async function buildRecap(t) {
+    let turn;
+    try {
+        turn = await readLastTurn(t.sessionFile);
+    }
+    catch (e) {
+        log(`回顾读取失败 ${t.key}: ${e?.message || e}`);
+        return plainText({ head: "⚠️ 读取失败", subject: t.label(), body: "会话记录暂时读不到，请稍后重试。" });
+    }
+    if (!turn)
+        return plainText({ head: "📜 暂无可回顾", subject: t.label(), body: t.busy ? "第一轮还在进行中，完成后推送。" : "这个会话还没有已结束的对话。" });
+    const head = turn.status === "aborted" ? "📜 回顾（已中断）" : turn.status === "error" ? "📜 回顾（出错）" : "📜 回顾";
+    const subject = t.label();
+    const prompt = oneLine(turn.prompt) || "（附件）";
+    const text = turn.text || "（无文本输出）";
+    const foot = [`目录：${dirLabel(t.cwd)}`, ago(turn.endedAt || Date.now())];
+    if (turn.startedAt && turn.endedAt)
+        foot.push(`运行：${human(turn.endedAt - turn.startedAt)}`);
+    if (t.busy)
+        foot.push("当前任务进行中");
+    const quote = `> ${clipWidth(prompt, 60)}\n\n\u3000\n\n`;
+    const full = plainText({ head, subject, body: quote + text, foot: foot.join(" · ") });
+    if (Buffer.byteLength(full) <= PUSH_TEXT_MAX_BYTES)
+        return full;
+    try {
+        const file = await uploadMdDoc({ name: subject, cwd: t.cwd, meta: `回顾 · ${text.length} 字`, body: `> ${prompt}\n\n${text}` });
+        return { text: plainText({ head, subject, body: quote + "字数超限，请查看 Markdown。", foot: foot.join(" · ") }), file };
+    }
+    catch {
+        return plainText({ head, subject, body: `${quote}${truncateUtf8(text, PUSH_TEXT_MAX_BYTES - 600)}\n\n…（共 ${text.length} 字，已截断）`, foot: foot.join(" · ") });
+    }
+}
+// ---- 会话产物：识别规则见 artifacts.mjs，状态挂在 target 上 ----
 const ART_LIST_MAX = VOTE_OPT_MAX;
 const ART_DIRECT_MAX = 3;
 const ART_SEND_MAX = 50 * 1024 * 1024;
-function artAllowed(p) {
-    if (!ART_EXT.has(path.extname(p).toLowerCase()))
-        return false;
-    const segs = p.split(path.sep);
-    if (segs.includes("node_modules") || segs.includes(".git"))
-        return false;
-    if (/^(\/private)?\/(tmp|var\/folders)\//.test(p))
-        return false;
-    const base = path.basename(p).toLowerCase();
-    return !(base.startsWith(".env") || base.endsWith(".pem") || base.includes("secret"));
-}
 function scanArtifacts(t) {
-    const file = t.sessionFile;
-    if (!file)
-        return [];
-    if (t.artFile !== file) {
-        t.artFile = file;
-        t.artOff = 0;
-        t.artPaths = new Map();
-    }
-    try {
-        const size = fs.statSync(file).size;
-        if (size < t.artOff) {
-            t.artOff = 0;
-            t.artPaths = new Map();
-        }
-        if (size > t.artOff) {
-            const buf = Buffer.alloc(size - t.artOff);
-            const fd = fs.openSync(file, "r");
-            try {
-                fs.readSync(fd, buf, 0, buf.length, t.artOff);
-            }
-            finally {
-                fs.closeSync(fd);
-            }
-            const end = buf.lastIndexOf(10) + 1;
-            for (const line of buf.subarray(0, end).toString("utf8").split("\n")) {
-                if (!line.includes('"name":"write"'))
-                    continue;
-                let rec;
-                try {
-                    rec = JSON.parse(line);
-                }
-                catch {
-                    continue;
-                }
-                const c = rec?.message?.content;
-                if (rec?.type !== "message" || !Array.isArray(c))
-                    continue;
-                for (const part of c) {
-                    if (part?.type !== "toolCall" || part.name !== "write")
-                        continue;
-                    const raw = part.arguments?.path || part.arguments?.file_path;
-                    if (typeof raw !== "string" || !raw)
-                        continue;
-                    const abs = path.resolve(t.cwd || HOME, expandPath(raw));
-                    if (artAllowed(abs))
-                        t.artPaths.set(abs, true);
-                }
-            }
-            t.artOff += end;
-        }
-    }
-    catch { }
-    const out = [];
-    for (const abs of t.artPaths.keys()) {
-        try {
-            const st = fs.statSync(abs);
-            if (st.isFile())
-                out.push({ file: abs, size: st.size, mtime: st.mtimeMs });
-        }
-        catch { }
-    }
-    return out.sort((a, b) => b.mtime - a.mtime);
+    return scanSessionArtifacts(t, t.sessionFile, t.cwd || HOME);
 }
 function artHint(t) {
     const n = scanArtifacts(t).length;
@@ -2830,8 +2851,9 @@ async function buildSelectedCard(t) {
         desc: t.busy ? "进行中，完成后推送结果" : "已选择，可开始对话",
         emph: { title: name },
         emphMax: EMPH_NAME_MAX,
+        body: t.busy ? "" : RECAP_TIP,
         facts,
-        fallback: () => plainText({head: "📥 选择会话", subject: name,
+        fallback: () => plainText({head: "📥 选择会话", subject: name, body: t.busy ? "" : RECAP_TIP,
             foot: facts.map(f => `${f.keyname}：${f.value}`).join(" · ")}),
     });
 }
@@ -2860,7 +2882,7 @@ function buildCreatedCard(t, note = "") {
         fallback: text,
     });
 }
-const PICK_AGAIN = { model: ["模型", "切换模型"], cwd: ["目录", "切换目录"], think: ["思考强度", "切换思考强度"] };
+const PICK_AGAIN = { model: ["模型", "切换模型"], cwd: ["目录", "切换目录"], think: ["思考强度", "切换思考强度"], status: ["状态", "状态"] };
 async function handleCardCallback({ taskId, optionId, optionIds = [] }) {
     const pick = cardPicks.get(optionId);
     if (pick?.act === "art") {
@@ -2894,30 +2916,35 @@ async function handleCardCallback({ taskId, optionId, optionIds = [] }) {
         return handleThinkPick(pick);
     if (pick.act === "cwd")
         return handleDirPick(pick);
+    if (pick.act === "status") {
+        const t = [targets.get(pick.targetKey), ...[...targets.values()].filter((x) => pick.sessionId && x.sessionId === pick.sessionId)].find(liveTarget);
+        return t ? statusCard(t) : plainText({ head: "⚠️ 查看状态失败", body: "所选会话已关闭。", foot: "发送 `状态` 重新选择" });
+    }
     const rows = await buildList({ find: pick.find || "", includeSub: !!pick.includeSub });
     return applyPick(pick, rows);
 }
-/** 暂存这条消息，用卡片问清发给当前会话还是刚推送的会话。 */
-function routeCard(cur, others, raw, media, ack) {
+/** 暂存这条消息，用卡片问清发给当前会话还是刚推送的会话；missed 为引用了却找不到的会话名。 */
+function routeCard(cur, others, raw, media, ack, missed = "") {
     const held = { raw, media };
     const opt = (t, tag) => ({ id: registerPick({ act: "route", targetKey: t.key, sessionId: t.sessionId, held }), text: clip(tag ? `${t.label()} ← ${tag}` : t.label(), 60) });
     const content = [raw ? clipWidth(raw, 40) : "", media.length ? `（${media.length} 个附件）` : ""].join("");
     const card = {
         card_type: "vote_interaction",
-        title: "✉️ 发给哪个会话？",
-        desc: `消息内容：${content}`,
-        options: [opt(cur, "当前"), ...others.slice(0, VOTE_OPT_MAX - 1).map((t, i) => opt(t, i ? "" : "刚推送"))],
+        title: missed ? "✉️ 引用的会话不在，发给哪个？" : "✉️ 发给哪个会话？",
+        desc: missed ? `找不到「${clipWidth(missed, 20)}」 · 消息内容：${content}` : `消息内容：${content}`,
+        options: [opt(cur, "当前"), ...others.slice(0, VOTE_OPT_MAX - 1).map((t, i) => opt(t, i || missed ? "" : "刚推送"))],
         mode: 0,
         submit_text: "发送",
         task_id: taskId("route"),
     };
     if (media.length)
         ack.media = true;
-    log(`推送过的是 ${others.map((t) => t.key).join(",")}，当前是 ${cur.key}：暂存消息，待选择`);
+    log(missed ? `引用的会话找不到，当前是 ${cur.key}：暂存消息，待选择` : `推送过的是 ${others.map((t) => t.key).join(",")}，当前是 ${cur.key}：暂存消息，待选择`);
     return cardBlock(card, "**消息未投递，请选择会话**", () => plainText({
         head: "✉️ 消息未投递",
-        body: `刚收到「${others.map((t) => clipWidth(t.label(), 20)).join("」「")}」的推送，当前会话是「${clipWidth(cur.label(), 20)}」。`,
-        foot: "引用推送重发，或发送 `活跃会话` 切换后重发",
+        body: missed ? `找不到引用的会话「${clipWidth(missed, 20)}」，当前会话是「${clipWidth(cur.label(), 20)}」。`
+            : `刚收到「${others.map((t) => clipWidth(t.label(), 20)).join("」「")}」的推送，当前会话是「${clipWidth(cur.label(), 20)}」。`,
+        foot: missed ? "发送 `活跃会话` 切换后重发" : "引用推送重发，或发送 `活跃会话` 切换后重发",
     }));
 }
 async function handleRoutePick(pick) {
@@ -2932,7 +2959,10 @@ async function handleRoutePick(pick) {
     return deliverWithMedia(t, pick.held.raw, pick.held.media, null);
 }
 async function handleCommand(text, media = [], ack = { media: false }, { quote = "" } = {}) {
-    const via = quotedTarget(quote);
+    const quoted = await quotedTarget(quote);
+    if (quoted?.failed)
+        return quoted.failed;
+    const via = quoted?.target || null;
     if (via && via !== currentTarget()) {
         log(`引用回复 → ${via.key} name=${JSON.stringify(via.label())}`);
         if (bindCurrent(via)) {
@@ -2974,6 +3004,10 @@ async function handleCommand(text, media = [], ack = { media: false }, { quote =
             log(`未绑定会话，退回选择卡（活跃 ${live.length} 个），原文未投递`);
             return cardBlock(card, "**消息未投递，请先选择会话**", () => renderList(live, rows, "消息未投递"));
         }
+        if (quoted?.missed) {
+            const live = [...targets.values()].filter((x) => liveTarget(x) && x !== t).sort((a, b) => b.lastActivity - a.lastActivity);
+            return routeCard(t, live, raw, media, ack, quoted.missed);
+        }
         const others = via ? [] : pushedOthers(t);
         if (others.length)
             return routeCard(t, others, raw, media, ack);
@@ -2982,7 +3016,7 @@ async function handleCommand(text, media = [], ack = { media: false }, { quote =
     const { cmd, rest } = parsed;
     if (parsed.alias || parsed.bare)
         log(`${parsed.alias ? `中文说法 ${parsed.alias}` : `免前缀 ${cmd}`} → ${cmd}${rest ? ` ${JSON.stringify(rest.slice(0, 60))}` : ""}`);
-    if (media.length && ["ls", "h", "status", "help", "stop", "model", "cd", "think", "compact", "art", "remote", "mute"].includes(cmd)) {
+    if (media.length && ["ls", "h", "status", "help", "stop", "model", "cd", "think", "compact", "art", "remote", "mute", "recap"].includes(cmd)) {
         log(`命令 ${cmd} 不投递内容，${media.length} 个附件未受理（mediaAccepted=false）`);
     }
     if (cmd === "help")
@@ -3059,7 +3093,7 @@ async function handleCommand(text, media = [], ack = { media: false }, { quote =
         });
     }
     if (cmd === "status")
-        return statusCard();
+        return statusPick();
     if (cmd === "restart")
         return restartDaemon(rest);
     if (cmd === "model") {
@@ -3087,6 +3121,12 @@ async function handleCommand(text, media = [], ack = { media: false }, { quote =
         if (!t)
             return NO_BIND();
         return buildArtCard(t);
+    }
+    if (cmd === "recap") {
+        const t = currentTarget();
+        if (!t)
+            return NO_BIND();
+        return buildRecap(t);
     }
     return plainText({ head: "⚠️ 未实现的命令", body: cmd, foot: "发送 `帮助` 查看命令" });
 }
@@ -3545,7 +3585,8 @@ async function handleHttp(req, res) {
     return json(res, 404, { error: "not found" });
 }
 transport = new WeComTransport({ config: CFG, dir: DIR, log,
-    onMessage: handleCommand, onCard: handleCardCallback, onBind: saveOwner });
+    onMessage: handleCommand, onCard: handleCardCallback, onBind: saveOwner,
+    isBusy: () => [...targets.values()].some((t) => t.busy) });
 server.on("error", error => { log(`监听失败 ${error.code}`); transport.stop(); process.exit(1); });
 server.listen(PORT, HOST, () => {
     transport.start();

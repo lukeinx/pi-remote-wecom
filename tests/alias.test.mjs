@@ -61,3 +61,11 @@ test('补全：子命令与已有别名', () => {
   assert.deepEqual(h.commands.remote.getArgumentCompletions('al').map(i => i.value), ['alias']);
   assert.equal(h.commands.alias, undefined);
 });
+
+test('/remote 菜单顺序：配置、会话命名、目录别名、重新绑定、重启、停止', async () => {
+  const h = harness();
+  let options;
+  await h.commands.remote.handler('', {cwd: dir, hasUI: true, ui: {...h.ui, select: async (_t, o) => {options = o;}}});
+  assert.deepEqual(options.map(o => o.split(' ').at(-1)), ['setup', 'name', 'alias', 'bind', 'restart', 'stop']);
+  assert.deepEqual(h.commands.remote.getArgumentCompletions('n').map(i => i.value), ['name']);
+});

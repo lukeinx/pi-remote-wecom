@@ -13,7 +13,7 @@ Control your local [Pi coding agent](https://pi.dev) from WeCom on your phone. O
 
 | Commands | Sessions | New session | Switch models | Task results |
 | --- | --- | --- | --- | --- |
-| <a href="https://raw.githubusercontent.com/KKinsz/pi-remote-wecom/main/docs/images/commands.png"><img src="https://raw.githubusercontent.com/KKinsz/pi-remote-wecom/main/docs/images/commands.png" width="180" alt="Commands"></a> | <a href="https://raw.githubusercontent.com/KKinsz/pi-remote-wecom/main/docs/images/sessions.png"><img src="https://raw.githubusercontent.com/KKinsz/pi-remote-wecom/main/docs/images/sessions.png" width="180" alt="Sessions"></a> | <a href="https://raw.githubusercontent.com/KKinsz/pi-remote-wecom/main/docs/images/create-session.png"><img src="https://raw.githubusercontent.com/KKinsz/pi-remote-wecom/main/docs/images/create-session.png" width="180" alt="New session"></a> | <a href="https://raw.githubusercontent.com/KKinsz/pi-remote-wecom/main/docs/images/switch-model.png"><img src="https://raw.githubusercontent.com/KKinsz/pi-remote-wecom/main/docs/images/switch-model.png" width="180" alt="Switch models"></a> | <a href="https://raw.githubusercontent.com/KKinsz/pi-remote-wecom/main/docs/images/task-result.png"><img src="https://raw.githubusercontent.com/KKinsz/pi-remote-wecom/main/docs/images/task-result.png" width="180" alt="Task results"></a> |
+| <a href="https://raw.githubusercontent.com/lukeinx/pi-remote-wecom/main/docs/images/commands.png"><img src="https://raw.githubusercontent.com/lukeinx/pi-remote-wecom/main/docs/images/commands.png" width="180" alt="Commands"></a> | <a href="https://raw.githubusercontent.com/lukeinx/pi-remote-wecom/main/docs/images/sessions.png"><img src="https://raw.githubusercontent.com/lukeinx/pi-remote-wecom/main/docs/images/sessions.png" width="180" alt="Sessions"></a> | <a href="https://raw.githubusercontent.com/lukeinx/pi-remote-wecom/main/docs/images/create-session.png"><img src="https://raw.githubusercontent.com/lukeinx/pi-remote-wecom/main/docs/images/create-session.png" width="180" alt="New session"></a> | <a href="https://raw.githubusercontent.com/lukeinx/pi-remote-wecom/main/docs/images/switch-model.png"><img src="https://raw.githubusercontent.com/lukeinx/pi-remote-wecom/main/docs/images/switch-model.png" width="180" alt="Switch models"></a> | <a href="https://raw.githubusercontent.com/lukeinx/pi-remote-wecom/main/docs/images/task-result.png"><img src="https://raw.githubusercontent.com/lukeinx/pi-remote-wecom/main/docs/images/task-result.png" width="180" alt="Task results"></a> |
 
 ## Install
 
@@ -28,7 +28,7 @@ pi install npm:pi-remote-wecom
 Or from Git:
 
 ```sh
-pi install git:github.com/KKinsz/pi-remote-wecom
+pi install git:github.com/lukeinx/pi-remote-wecom
 ```
 
 Alternatively, install from a source checkout:
@@ -44,7 +44,7 @@ pi install "$PWD"
 
 The UI and bot replies are currently primarily in Chinese. English command aliases are supported.
 
-**Optional naming:** run `/tabmodel` to choose a naming model. New sessions are named from their first input; `/tabmodel reset` disables this. Without a naming model, no naming request is made and the session list uses the first input.
+**Optional naming:** run `/remote name` to choose a naming model. New sessions are named from their first input; `/remote name off` disables this. Without a naming model, no naming request is made and the session list uses the first input.
 
 ## Commands
 
@@ -74,11 +74,10 @@ In Pi:
 |---|---|
 | `/remote` | View connection status and manage the daemon |
 | `/remote setup` | Configure the bot |
+| `/remote name` | Session naming: `model` chooses the naming model, `off` disables it, `auto` regenerates, any other text renames |
+| `/remote alias` | Manage directory aliases |
 | `/remote bind` | Bind or rebind your WeCom account |
 | `/remote restart` / `/remote stop` | Start or restart / stop the daemon |
-| `/remote alias` | Manage directory aliases |
-| `/tabmodel` | Choose an automatic naming model; `reset` disables it |
-| `/tabname name` | Rename a session manually |
 
 ## Terminals and configuration
 

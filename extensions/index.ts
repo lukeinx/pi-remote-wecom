@@ -4,12 +4,12 @@ import type {ExtensionAPI} from '@earendil-works/pi-coding-agent';
 import {getAgentDir} from '@earendil-works/pi-coding-agent';
 import remote from './remote.ts';
 import {aliasCommand, aliasCompletions} from './alias.ts';
-import tabTitle, {namingEnabled} from '../vendor/tab-title/index.ts';
+import tabTitle, {namingEnabled, nameCompletions} from '../vendor/tab-title/index.ts';
 import {RUN_DIR, WELCOME_FILE, BIND_FILE, BIND_TTL_MS, diskVersion, loadConfig, saveConfig, createBindCode} from '../daemon/config.mjs';
 import {health, startService, stopService, restartService} from '../daemon/service.mjs';
 
 const SUBCOMMANDS: [string, string][] = [
-  ['setup', '配置'], ['bind', '重新绑定'], ['restart', '重启'], ['stop', '停止'], ['alias', '目录别名'],
+  ['setup', '配置'], ['name', '会话命名'], ['alias', '目录别名'], ['bind', '重新绑定'], ['restart', '重启'], ['stop', '停止'],
 ];
 const configured = (cfg: {botId: string; secret: string}) => !!(cfg.botId && cfg.secret);
 const BIND_MANUAL = '手动填写 userid（形如 T12345678A）';
@@ -59,25 +59,35 @@ export default function (pi: ExtensionAPI) {
   } catch {}
   // Keep hook order: remote first, then naming. Legacy namers own their model settings, so assume they name sessions.
   const {reload} = remote(pi, {autoName: () => legacyTitle || (cfg.tabTitleEnabled && namingEnabled())});
-  if (cfg.tabTitleEnabled && !legacyTitle) tabTitle(pi);
+  const naming = cfg.tabTitleEnabled && !legacyTitle ? tabTitle(pi) : undefined;
+  // Legacy namers keep their own /tabmodel and /tabname; don't offer a second entry.
+  const subcommands = SUBCOMMANDS.filter(([v]) => v !== 'name' || !legacyTitle);
   pi.registerCommand('remote', {
-    description: '企微多会话遥控：状态与 setup / restart / stop / alias',
+    description: '企微多会话遥控：状态与 setup / name / alias / restart / stop',
     getArgumentCompletions: prefix => {
       const m = prefix.match(/^alias\s+([\s\S]*)$/);
       if (m) return aliasCompletions(m[1]).map(i => ({...i, value: `alias ${i.value}`}));
+      const n = prefix.match(/^name\s+([\s\S]*)$/);
+      if (n) return naming ? nameCompletions(n[1]).map(i => ({...i, value: `name ${i.value}`})) : null;
       if (/\s/.test(prefix)) return null;
-      return SUBCOMMANDS.filter(([v]) => v.startsWith(prefix)).map(([value, description]) => ({value, label: value, description}));
+      return subcommands.filter(([v]) => v.startsWith(prefix)).map(([value, description]) => ({value, label: value, description}));
     },
     handler: async (args, ctx) => {
       let action = args.trim().split(/\s+/)[0] || '';
       if (!action && !configured(loadConfig())) action = 'setup';
       if (!action) {
-        const choice = await ctx.ui.select(`企微遥控 · ${summary(await health())}`, SUBCOMMANDS.map(([v, d]) => `${d} ${v}`));
+        const choice = await ctx.ui.select(`企微遥控 · ${summary(await health())}`, subcommands.map(([v, d]) => `${d} ${v}`));
         if (!choice) return;
         action = choice.split(' ').at(-1)!;
       }
       if (action === 'alias') return aliasCommand(args.trim().slice('alias'.length), ctx);
       if (action === 'reload') return reload(ctx);
+      if (action === 'name') {
+        if (naming) return naming.nameCommand(args.trim().slice('name'.length), ctx);
+        return ctx.ui.notify(legacyTitle
+          ? '会话命名由已安装的独立命名扩展管理，请用 /tabmodel、/tabname。'
+          : '会话命名已在 config.json 关闭（tabTitleEnabled），开启后执行 /reload。', 'warning');
+      }
       try {
         if (action === 'setup') {
           const running = await health();
@@ -125,7 +135,7 @@ export default function (pi: ExtensionAPI) {
         } else if (action === 'status' || action === 'doctor') {
           // Hidden legacy alias: /remote itself now shows status.
           ctx.ui.notify(summary(await health()), 'info');
-        } else ctx.ui.notify('用法：/remote（状态与菜单）| setup | bind | restart | stop | alias', 'warning');
+        } else ctx.ui.notify('用法：/remote（状态与菜单）| setup | name | alias | bind | restart | stop', 'warning');
       } catch (error) {ctx.ui.notify((error as Error).message, 'error');}
     },
   });

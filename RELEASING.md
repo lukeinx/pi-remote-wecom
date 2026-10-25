@@ -9,10 +9,10 @@ Local `main` tracks `origin/main` (CNB) and is the development base: `git switch
 Maintain one codebase in one local checkout. Keep `origin` pointing to the existing CNB repository and add `github` for the public repository. Do not change the existing origin URL or configure multiple push URLs on it: each destination should be explicit.
 
 ```text
-git remote add github https://github.com/KKinsz/pi-remote-wecom.git
+git remote add github https://github.com/lukeinx/pi-remote-wecom.git
 ```
 
-The chosen public destination is `KKinsz/pi-remote-wecom`. If the remote already exists, inspect it with `git remote -v` rather than adding it again. A remote entry alone neither creates the hosted repository nor uploads code.
+The chosen public destination is `lukeinx/pi-remote-wecom`. If the remote already exists, inspect it with `git remote -v` rather than adding it again. A remote entry alone neither creates the hosted repository nor uploads code.
 
 Use the same reviewed source and release version for both destinations. Do not keep internal and external feature variants. Develop changes once, run checks once for that revision, then promote the approved revision through the respective repository's review process. Bring community fixes into the same development branch before the next release. CNB and GitHub CI definitions live together; npm is built from that same reviewed release.
 
@@ -20,7 +20,7 @@ CNB keeps its existing development history. GitHub starts with a parentless init
 
 ## First public release
 
-1. The public destination and npm name are `KKinsz/pi-remote-wecom` and `pi-remote-wecom`. Confirm you can create/publish them; a name lookup does not reserve either name. Keep `repository`, `homepage`, and `bugs` in `package.json` aligned, and update the publication status in both READMEs when each channel goes live. Use `git+https://github.com/KKinsz/pi-remote-wecom.git` for the repository metadata.
+1. The public destination and npm name are `lukeinx/pi-remote-wecom` and `pi-remote-wecom`. Confirm you can create/publish them; a name lookup does not reserve either name. Keep `repository`, `homepage`, and `bugs` in `package.json` aligned, and update the publication status in both READMEs when each channel goes live. Use `git+https://github.com/lukeinx/pi-remote-wecom.git` for the repository metadata.
 2. Keep `pi-package` in `keywords` so the npm package is eligible for Pi gallery discovery. Keep the explicit extension entry, production dependency list, and `files` allowlist.
 3. Review the exact source snapshot, commit message, and public author identity. Build the first public commit without parents; preserve licenses and source notices but exclude untracked research and runtime files. Keep the existing CNB history intact. A current-file check does not check commit metadata or ancestors, so verify the public branch contains only the intended public commits.
 4. Confirm an unused version and package name on npm, synchronize `package.json` and `package-lock.json`, and move the intended `Unreleased` changes into a dated release entry. Preserve the exact scope of real-device validation rather than claiming untested environments.
@@ -48,10 +48,10 @@ source_commit=SOURCE_COMMIT
 public_ref=refs/heads/public-release
 previous_public=$(git rev-parse "$public_ref")
 source_tree=$(git rev-parse "$source_commit^{tree}")
-new_public=$(GIT_AUTHOR_NAME=KKinsz \
-  GIT_AUTHOR_EMAIL=50832259+KKinsz@users.noreply.github.com \
-  GIT_COMMITTER_NAME=KKinsz \
-  GIT_COMMITTER_EMAIL=50832259+KKinsz@users.noreply.github.com \
+new_public=$(GIT_AUTHOR_NAME=lukeinx \
+  GIT_AUTHOR_EMAIL=50832259+lukeinx@users.noreply.github.com \
+  GIT_COMMITTER_NAME=lukeinx \
+  GIT_COMMITTER_EMAIL=50832259+lukeinx@users.noreply.github.com \
   git commit-tree "$source_tree" -p "$previous_public" -m "Release VERSION")
 git update-ref "$public_ref" "$new_public" "$previous_public"
 git diff --exit-code "$source_commit" "$public_ref" --
@@ -71,7 +71,7 @@ Once the repository and release are approved for public distribution:
 Example installation syntax after the corresponding artifacts exist:
 
 ```text
-pi install git:github.com/KKinsz/pi-remote-wecom@vVERSION
+pi install git:github.com/lukeinx/pi-remote-wecom@vVERSION
 pi install npm:pi-remote-wecom@VERSION
 ```
 

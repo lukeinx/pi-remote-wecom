@@ -1,6 +1,6 @@
 {
   "name": "pi-remote-wecom",
-  "version": "0.3.17",
+  "version": "0.3.18",
   "description": "Control multiple local Pi sessions from WeCom, with session naming, attachments, and task results.",
   "type": "module",
   "license": "MIT",
@@ -73,10 +73,10 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/KKinsz/pi-remote-wecom.git"
+    "url": "git+https://github.com/lukeinx/pi-remote-wecom.git"
   },
-  "homepage": "https://github.com/KKinsz/pi-remote-wecom",
+  "homepage": "https://github.com/lukeinx/pi-remote-wecom",
   "bugs": {
-    "url": "https://github.com/KKinsz/pi-remote-wecom/issues"
+    "url": "https://github.com/lukeinx/pi-remote-wecom/issues"
   }
 }

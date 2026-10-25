@@ -133,11 +133,11 @@ export const BIND_CARD = {
 };
 export const BIND_HINT = '尚未绑定。请在电脑 Pi 执行 `/remote bind`，把显示的 6 位绑定码发到这里。';
 export class WeComTransport {
-  constructor({config, dir, onMessage, onCard, onBind = () => {}, log = () => {}, client}) {
-    this.config = config; this.dir = dir; this.log = log; this.onBind = onBind;
+  constructor({config, dir, onMessage, onCard, onBind = () => {}, isBusy = () => false, log = () => {}, client}) {
+    this.config = config; this.dir = dir; this.log = log; this.onBind = onBind; this.isBusy = isBusy;
     this.onMessage = onMessage; this.onCard = onCard;
     this.connected = false; this.reason = '未连接'; this.working = false;
-    this.sequence = 0; this.lastOwnerSendAt = 0; this.closed = false; this.inbound = Promise.resolve(); this.pendingMedia = [];
+    this.sequence = 0; this.lastOwnerSendAt = 0; this.lastOwnerRecvAt = 0; this.closed = false; this.inbound = Promise.resolve(); this.pendingMedia = [];
     this.outDir = path.join(dir, 'outbox'); fs.mkdirSync(this.outDir, {recursive: true, mode: 0o700});
     this.markdownDir = path.join(dir, 'markdown'); fs.mkdirSync(this.markdownDir, {recursive: true, mode: 0o700});
     this.cardsFile = path.join(dir, 'cards.json'); this.cards = new Map();
@@ -168,8 +168,11 @@ export class WeComTransport {
     this.client.on('event.template_card_event', frame => this.accept(frame, true));
     this.client.on('event.enter_chat', frame => {
       if (this.closed || this.draining) return;
-      // 刚发过消息（如重启通知、任务回复）时不再叠一条欢迎语；未绑定的绑定提示不受影响。
-      const quiet = Date.now() - this.lastOwnerSendAt < WELCOME_QUIET_MS;
+      // 任务运行中、或双方刚有往来（如重启通知、任务回复、刚发的指令）时不再叠一条欢迎语；未绑定的绑定提示不受影响。
+      const recent = Date.now() - Math.max(this.lastOwnerSendAt, this.lastOwnerRecvAt) < WELCOME_QUIET_MS;
+      let busy = false;
+      try { busy = Boolean(this.isBusy()); } catch {}
+      const quiet = recent || busy;
       const content = this.authorized(frame.body) ? (quiet ? '' : WELCOME) : !this.bound() && this.bindable(frame.body) ? BIND_HINT : '';
       // 欢迎语回复只支持 text（不渲染 Markdown，反引号会原样显示）：改发 markdown 消息，命令才显示为行内代码。
       if (!content) return;
@@ -363,6 +366,7 @@ export class WeComTransport {
     this.seen.set(id, now);
     if (this.seen.size > 10000) this.seen.delete(this.seen.keys().next().value);
     writeJson(this.seenFile, [...this.seen]);
+    if (allowed) this.lastOwnerRecvAt = now;
     if (binding) {
       // Never download attachments or reach Pi before an owner exists. Re-check inside the queue:
       // an earlier queued message may have bound someone meanwhile.

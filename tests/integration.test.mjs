@@ -127,8 +127,9 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
   const help=await api('/command',{text:'帮助'});
   assert.match(help.reply,/^\*\*📖 命令表\*\*/);
   assert.match(help.reply,/^\*\*Tips\*\*\n\n> 1\. /m);
-  assert.match(help.reply,/^> 2\. .*\/tabmodel/m);
-  assert.match(help.reply,/^> 3\. .*附件/m);
+  assert.match(help.reply,/^> 2\. .*附件/m);
+  assert.match(help.reply,/^> 3\. 引用消息/m);
+  assert.doesNotMatch(help.reply,/^> 4\. |自动命名/m);
   assert.doesNotMatch(help.reply,/select/);
   assert.doesNotMatch(help.reply,/关键词|重启|后台会话/); assert.doesNotMatch(help.reply,/\.(ls|h|n|nb|status|help|stop)/);
   // Short alias words replace the long ones in the panel.
@@ -154,6 +155,15 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
   assert.equal(list.reply.card.options.length,2);
   await api('/register',{mode:'tui',sessionId:'B',sessionName:'会话B',cwd:dir});
   await api('/command',{text:'选择会话 1'}); // B most recently registered
+  assert.equal((await api('/health')).current,b.key);
+  // Another session is running: status asks which one first; picking A shows its status without switching.
+  const statusPick=(await api('/command',{text:'状态'})).reply.card;
+  assert.deepEqual(statusPick.options.map(o=>o.text),['会话B · ← 当前','会话A · ← 运行中']);
+  socket.send(JSON.stringify({cmd:'aibot_event_callback',headers:{req_id:`card-${++seq}`},body:{msgid:`card-${seq}`,aibotid:'test-bot',chattype:'single',from:{userid:'owner'},msgtype:'event',event:{eventtype:'template_card_event',template_card_event:{task_id:statusPick.task_id,selected_items:{selected_item:[{question_key:statusPick.task_id,option_ids:{option_id:[statusPick.options[1].id]}}]}}}}}));
+  const aMeta=await until(async()=>(await api(`/poll?key=${a.key}`)).messages?.find(m=>m.type==='get_meta'));
+  await api('/meta-ack',{key:a.key,reqId:aMeta.reqId});
+  const aStatus=await until(()=>sent.find(x=>x.markdown?.content.includes('⏳ 运行中 · 会话A')&&x.markdown.content.includes('已运行'))?.markdown.content);
+  assert.match(aStatus,/引用消息，回复会发给该会话/);
   assert.equal((await api('/health')).current,b.key);
   await api('/result',{key:a.key,runId:'run-A',text:'A的独立结果',sessionName:'会话A'});
   await until(()=>sent.some(x=>x.markdown?.content.includes('A的独立结果')));
@@ -470,7 +480,7 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
   await api('/result',{key:b.key,runId:'w-B3',text:'B3手机结果'});
   await until(()=>pushed('B3手机结果'));
   assert.ok(!pushed('B1取关后的结果')); assert.ok(!pushed('B2取关后的结果'));
-  assert.match((await api('/command',{text:'关注'})).reply,/没有运行中的终端会话/);
+  assert.match((await api('/command',{text:'关注'})).reply,/目前没有运行中的任务/);
   await api('/turn',{key:b.key,runId:'w-B4',local:true,prompt:'B恢复后桌面任务'});
   await api('/result',{key:b.key,runId:'w-B4',text:'B4恢复后的结果'});
   await until(()=>pushed('B4恢复后的结果'));
@@ -498,6 +508,15 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
   assert.match((await api('/command',{text:'帮助'})).reply,/\| remote \/ mute \| 关注 \/ 取关 \|/);
   const all=await api('/health'); assert.equal(all.targets.filter(x=>x.kind==='rpc').length,8); // 2 + 2 alias + 3 confirm + 1 default-dir sessions
   assert.equal(all.targets.filter(x=>x.kind==='tui').length,2);
+  // Quoting a push whose session has exited (e.g. a background session after restart): reopen it from history.
+  const revived=(await api('/command',{text:'引用回历史',quote:'🏁 任务完成 · 相关性目标会话\n\n旧结果'})).reply;
+  assert.match(revived,/任务完成 · 相关性目标会话[\s\S]*后台结果：引用回历史/);
+  const reopened=(await api('/health')).targets.find(x=>x.name==='相关性目标会话');
+  assert.equal(reopened?.kind,'rpc'); assert.equal((await api('/health')).current,reopened.key);
+  // A quoted push that matches no session holds the message instead of falling back to the current session.
+  const lost=(await api('/command',{text:'本想回丢失的会话',quote:'🏁 任务完成 · 不存在的会话\n\nbody'})).reply.card;
+  assert.equal(lost.title,'✉️ 引用的会话不在，发给哪个？'); assert.match(lost.desc,/找不到「不存在的会话」/);
+  assert.match(lost.options[0].text,/相关性目标会话 ← 当前/);
   assert.equal(errors,'');
 });
 

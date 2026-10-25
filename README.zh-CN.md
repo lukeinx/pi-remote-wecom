@@ -13,7 +13,7 @@
 
 | 命令帮助 | 会话管理 | 创建会话 | 切换模型 | 任务回传 |
 | --- | --- | --- | --- | --- |
-| <a href="https://raw.githubusercontent.com/KKinsz/pi-remote-wecom/main/docs/images/commands.png"><img src="https://raw.githubusercontent.com/KKinsz/pi-remote-wecom/main/docs/images/commands.png" width="180" alt="命令帮助"></a> | <a href="https://raw.githubusercontent.com/KKinsz/pi-remote-wecom/main/docs/images/sessions.png"><img src="https://raw.githubusercontent.com/KKinsz/pi-remote-wecom/main/docs/images/sessions.png" width="180" alt="会话管理"></a> | <a href="https://raw.githubusercontent.com/KKinsz/pi-remote-wecom/main/docs/images/create-session.png"><img src="https://raw.githubusercontent.com/KKinsz/pi-remote-wecom/main/docs/images/create-session.png" width="180" alt="创建会话"></a> | <a href="https://raw.githubusercontent.com/KKinsz/pi-remote-wecom/main/docs/images/switch-model.png"><img src="https://raw.githubusercontent.com/KKinsz/pi-remote-wecom/main/docs/images/switch-model.png" width="180" alt="切换模型"></a> | <a href="https://raw.githubusercontent.com/KKinsz/pi-remote-wecom/main/docs/images/task-result.png"><img src="https://raw.githubusercontent.com/KKinsz/pi-remote-wecom/main/docs/images/task-result.png" width="180" alt="任务回传"></a> |
+| <a href="https://raw.githubusercontent.com/lukeinx/pi-remote-wecom/main/docs/images/commands.png"><img src="https://raw.githubusercontent.com/lukeinx/pi-remote-wecom/main/docs/images/commands.png" width="180" alt="命令帮助"></a> | <a href="https://raw.githubusercontent.com/lukeinx/pi-remote-wecom/main/docs/images/sessions.png"><img src="https://raw.githubusercontent.com/lukeinx/pi-remote-wecom/main/docs/images/sessions.png" width="180" alt="会话管理"></a> | <a href="https://raw.githubusercontent.com/lukeinx/pi-remote-wecom/main/docs/images/create-session.png"><img src="https://raw.githubusercontent.com/lukeinx/pi-remote-wecom/main/docs/images/create-session.png" width="180" alt="创建会话"></a> | <a href="https://raw.githubusercontent.com/lukeinx/pi-remote-wecom/main/docs/images/switch-model.png"><img src="https://raw.githubusercontent.com/lukeinx/pi-remote-wecom/main/docs/images/switch-model.png" width="180" alt="切换模型"></a> | <a href="https://raw.githubusercontent.com/lukeinx/pi-remote-wecom/main/docs/images/task-result.png"><img src="https://raw.githubusercontent.com/lukeinx/pi-remote-wecom/main/docs/images/task-result.png" width="180" alt="任务回传"></a> |
 
 ## 安装
 
@@ -28,7 +28,7 @@ pi install npm:pi-remote-wecom
 或从 Git 安装：
 
 ```sh
-pi install git:github.com/KKinsz/pi-remote-wecom
+pi install git:github.com/lukeinx/pi-remote-wecom
 ```
 
 也可在仓库目录中直接源码安装：
@@ -44,7 +44,7 @@ pi install "$PWD"
 2. 在 Pi 中执行 `/reload`，再执行 `/remote setup`，填写 BotID 和 Secret，Pi 会显示 6 位绑定码。
 3. 在企微单聊机器人发送绑定码，收到「绑定成功」卡片后，点 **活跃会话** 即可开始聊天。
 
-**自动命名**：手机靠会话名挑选会话。执行 `/tabmodel` 选一个命名模型后，每个新会话会根据首条输入生成短标题，同步到终端标签和手机；不选则不命名、不耗 token，列表显示首条输入。
+**自动命名**：手机靠会话名挑选会话。执行 `/remote name` 选一个命名模型后，每个新会话会根据首条输入生成短标题，同步到终端标签和手机；不选则不命名、不耗 token，列表显示首条输入。
 
 ## 常用命令
 
@@ -61,9 +61,10 @@ pi install "$PWD"
 | `compact` | `压缩会话 [说明]` / `压缩 [说明]` | 手动压缩当前会话上下文，可附说明作为压缩重点；运行中不可压缩，自动压缩仍由 Pi 负责 |
 | `restart` | `重启 [force]` | 重启手机遥控后台服务（加载新代码）；有任务运行时默认拒绝并列出占用会话，`重启 force` 可强制中断 |
 | `cd` | `切换目录 [别名]` / `目录 [别名]` | 从目录别名中选择新建会话的默认目录（默认 `~`）；已有会话不受影响 |
-| `art` | `产物` / `查看产物` | 列出当前会话生成的 html/md/pdf/docx/xlsx/pptx/png/svg 文件：不超过 3 个时直接发送，更多时用卡片多选发送；有产物的会话在完成消息末尾提示（数量变化时） |
+| `art` | `产物` / `查看产物` | 列出当前会话生成的 html/md/pdf/docx/xlsx/pptx/png/svg 文件（write / edit 写过的，或回复里链接给出且本会话碰过的；不含 git 跟踪的仓库文件、隐藏目录和临时目录）：不超过 3 个时直接发送，更多时用卡片多选发送；有产物的会话在完成消息末尾提示（数量变化时） |
+| `recap` | `回顾` | 推送当前会话上一轮已结束的对话（提问与最后一段回复），沿当前分支取，进行中的一轮跳过；正文超长时转 Markdown 文档。选中会话的卡片会提示这条命令 |
 | `remote` / `mute` | `关注` / `取关`（也可 `取消关注`、`静音`） | 出门时发 `关注`：所有终端会话里在跑的任务完成后逐个推送，待答的问题会提醒。回到电脑前发 `取关`：电脑上发起的任务（含在跑的）不再推送，手机发起的照常推送；发 `关注`、在手机上切换会话或重启服务后恢复 |
-| `status` / `stop` / `help` | `状态` / `停止` / `帮助` | 查看状态（目录与分支、模型与思考强度、上下文、花费、其他扩展经 `setStatus` 写入的状态项，可用 config `statusKeys` 限定白名单；按内置 footer 格式，无需安装 footer 扩展）、中断任务、查看全部命令 |
+| `status` / `stop` / `help` | `状态` / `停止` / `帮助` | 查看状态（目录与分支、模型与思考强度、上下文、花费、其他扩展经 `setStatus` 写入的状态项，可用 config `statusKeys` 限定白名单；按内置 footer 格式，无需安装 footer 扩展；还有其他运行中会话时先弹卡片选看哪个）、中断任务、查看全部命令 |
 
 图片或文件可先发送，再在 5 分钟内补充说明；每次最多 10 件（本项目限制），每件不超过 100MiB（104,857,600 字节；官方标注为「100M」，仅指入站）。任务完成后自动回传结果，长结果以文件发送；回传方向受 SDK 分片上传限制约 50MiB。
 
@@ -75,11 +76,10 @@ pi install "$PWD"
 |---|---|
 | `/remote` | 查看状态与管理服务 |
 | `/remote setup` | 配置机器人 |
+| `/remote name` | 会话命名：`model` 选择自动命名模型，`off` 关闭，`auto` 重新生成，直接跟名称则手动改名 |
+| `/remote alias` | 设置常用目录别名 |
 | `/remote bind` | 重新绑定企微账号 |
 | `/remote restart` / `/remote stop` | 启动或重启 / 停止服务 |
-| `/remote alias` | 设置常用目录别名 |
-| `/tabmodel` | 选择自动命名模型；`reset` 关闭 |
-| `/tabname 名称` | 手动修改会话名 |
 
 ## 支持的终端
 

@@ -1,6 +1,7 @@
 /**
  * One-shot Chinese terminal titles from the first prompt, parallel to the main agent.
- * /tabmodel selects a separate naming model; /tabname NAME renames; /tabname auto retries.
+ * /remote name model selects a separate naming model; /remote name NAME renames; /remote name auto retries.
+ * /tabmodel and /tabname remain as deprecated aliases for one release.
  * Three runtime icons: animated braille while running, × on failure, · on completion.
  * Uses public extension APIs only. Timer animates the title; no polling or raw terminal writes.
  */
@@ -11,6 +12,7 @@ import {
   getAgentDir,
   ModelSelectorComponent,
   type ExtensionAPI,
+  type ExtensionCommandContext,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
@@ -74,6 +76,22 @@ export function namingEnabled(): boolean {
   } catch {
     return false;
   }
+}
+
+/** Completions for the text after "/remote name ". Values are relative to that prefix. */
+export function nameCompletions(prefix: string) {
+  const model = prefix.match(/^model\s+(\S*)$/);
+  if (model)
+    return [
+      { value: "model current", label: "current", description: "固定为当前主模型" },
+      { value: "model show", label: "show", description: "查看命名模型" },
+    ].filter((i) => i.label.startsWith(model[1]));
+  if (/\s/.test(prefix)) return [];
+  return [
+    { value: "model", label: "model", description: "更换命名模型" },
+    { value: "auto", label: "auto", description: "按首条输入重新生成" },
+    { value: "off", label: "off", description: "关闭自动命名" },
+  ].filter((i) => i.value.startsWith(prefix));
 }
 
 /** Pi's native /model picker (search + scrolling) in the TUI; plain select list elsewhere. */
@@ -321,7 +339,7 @@ export default function (pi: ExtensionAPI) {
       logFailure(error, false);
       save({ version: 1, status: "failed", title: previousTitle, source: "auto", ...retried });
       ctx.ui.notify(
-        "标签命名未完成；不会自动重试。可用 /tabmodel 检查命名模型、/tabname auto 重试，或 /tabname 名称手动命名。",
+        "会话命名未完成；不会自动重试。可用 /remote name model 检查命名模型、/remote name auto 重试，或 /remote name 名称手动命名。",
         "warning",
       );
     } finally {
@@ -482,136 +500,172 @@ export default function (pi: ExtensionAPI) {
     cancel();
   });
 
-  pi.registerCommand("tabmodel", {
-    description:
-      "选择并全局保存命名模型；/tabmodel provider/model-id、current、reset 或 show。不改变主任务模型。",
-    handler: async (args, ctx) => {
-      if (!active) return;
-      const ticket = ++modelSelection;
-      const value = args.trim();
-      let selected: NamingModel | undefined;
-      try {
-        if (value === "show") {
-          const current = readNamingModel();
-          ctx.ui.notify(
-            `命名模型：${current.provider}/${current.model}（全局；不跟随主任务模型）。配置：${join(getAgentDir(), CONFIG_FILE)}`,
-            "info",
-          );
-          return;
-        }
-        if (value === "current") {
-          if (ctx.model) selected = { provider: ctx.model.provider, model: ctx.model.id };
-        } else if (value === "reset") {
-          rmSync(join(getAgentDir(), CONFIG_FILE), { force: true });
-          cancel();
-          armed = false;
-          ctx.ui.notify("已关闭自动命名；/tabmodel 可重新选择模型。", "info");
-          return;
-        } else if (value) {
-          selected = parseModelSpec(value);
-        } else {
-          let currentLabel = "未能读取配置";
-          let current: NamingModel | undefined;
-          try {
-            current = readNamingModel();
-            currentLabel = current.provider ? `${current.provider}/${current.model}` : "未设置";
-          } catch {
-            /* Allow the picker to repair an invalid config explicitly. */
-          }
-          const choices = [
-            ...new Set(
-              ctx.modelRegistry
-                .getAvailable()
-                .map((model) => `${model.provider}/${model.id}`)
-                .filter((spec) => parseModelSpec(spec)),
-            ),
-          ].sort();
-          if (choices.length === 0) {
-            ctx.ui.notify(
-              "没有已配置认证的模型。请先在 Pi 中配置模型并 /login，再执行 /tabmodel。",
-              "warning",
-            );
-            return;
-          }
-          const choice = await pickNamingModel(
-            ctx,
-            `命名模型（全局，建议轻量模型；当前：${currentLabel}）`,
-            current,
-            choices,
-          );
-          if (!active || modelSelection !== ticket || choice === undefined) return;
-          selected = parseModelSpec(choice);
-        }
-        if (!selected) {
-          ctx.ui.notify(
-            "用 /tabmodel 选择，或输入 /tabmodel provider/model-id；current 固定当前主模型，reset 关闭自动命名，show 查看。",
-            "warning",
-          );
-          return;
-        }
-        const available = ctx.modelRegistry
-          .getAvailable()
-          .some((model) => model.provider === selected!.provider && model.id === selected!.model);
-        if (!available) {
-          ctx.ui.notify(
-            "该模型不存在或尚未配置认证，原设置未改变。请先在 Pi 中配置模型并 /login。",
-            "warning",
-          );
-          return;
-        }
-        writeNamingModel(selected);
-        if (!state && !firstUserPrompt(ctx)) armed = true;
-        // Only cancel in-flight naming in this runtime, after the new config is saved.
-        // Other tabs keep their current request; they read this choice next time.
-        if (controller) {
-          cancel();
-          save({ version: 1, status: "skipped", title: state?.title, source: "auto" });
-        }
+  async function modelCommand(args: string, ctx: ExtensionCommandContext) {
+    if (!active) return;
+    const ticket = ++modelSelection;
+    const value = args.trim();
+    let selected: NamingModel | undefined;
+    try {
+      if (value === "show") {
+        const current = readNamingModel();
         ctx.ui.notify(
-          `命名模型已设为 ${selected.provider}/${selected.model}。主任务模型不变；下次命名生效，用 /tabname auto 可立即重试。`,
+          `命名模型：${current.provider ? `${current.provider}/${current.model}` : "未设置"}（全局；不跟随主任务模型）。配置：${join(getAgentDir(), CONFIG_FILE)}`,
           "info",
         );
-      } catch {
+        return;
+      }
+      if (value === "current") {
+        if (ctx.model) selected = { provider: ctx.model.provider, model: ctx.model.id };
+      } else if (value === "reset" || value === "off") {
+        rmSync(join(getAgentDir(), CONFIG_FILE), { force: true });
+        cancel();
+        armed = false;
+        ctx.ui.notify("已关闭自动命名；/remote name model 可重新选择模型。", "info");
+        return;
+      } else if (value) {
+        selected = parseModelSpec(value);
+      } else {
+        let currentLabel = "未能读取配置";
+        let current: NamingModel | undefined;
+        try {
+          current = readNamingModel();
+          currentLabel = current.provider ? `${current.provider}/${current.model}` : "未设置";
+        } catch {
+          /* Allow the picker to repair an invalid config explicitly. */
+        }
+        const choices = [
+          ...new Set(
+            ctx.modelRegistry
+              .getAvailable()
+              .map((model) => `${model.provider}/${model.id}`)
+              .filter((spec) => parseModelSpec(spec)),
+          ),
+        ].sort();
+        if (choices.length === 0) {
+          ctx.ui.notify(
+            "没有已配置认证的模型。请先在 Pi 中配置模型并 /login，再执行 /remote name model。",
+            "warning",
+          );
+          return;
+        }
+        const choice = await pickNamingModel(
+          ctx,
+          `命名模型（全局，建议轻量模型；当前：${currentLabel}）`,
+          current,
+          choices,
+        );
+        if (!active || modelSelection !== ticket || choice === undefined) return;
+        selected = parseModelSpec(choice);
+      }
+      if (!selected) {
         ctx.ui.notify(
-          "命名模型配置读取或保存失败，请检查 pi-tab-title.json 的格式及目录权限；未切换主任务模型，也未发起命名请求。",
+          "用法：/remote name model 选择，或 /remote name model provider/model-id；current 固定当前主模型，show 查看；/remote name off 关闭自动命名。",
           "warning",
         );
+        return;
       }
+      const available = ctx.modelRegistry
+        .getAvailable()
+        .some((model) => model.provider === selected!.provider && model.id === selected!.model);
+      if (!available) {
+        ctx.ui.notify(
+          "该模型不存在或尚未配置认证，原设置未改变。请先在 Pi 中配置模型并 /login。",
+          "warning",
+        );
+        return;
+      }
+      writeNamingModel(selected);
+      if (!state && !firstUserPrompt(ctx)) armed = true;
+      // Only cancel in-flight naming in this runtime, after the new config is saved.
+      // Other tabs keep their current request; they read this choice next time.
+      if (controller) {
+        cancel();
+        save({ version: 1, status: "skipped", title: state?.title, source: "auto" });
+      }
+      ctx.ui.notify(
+        `命名模型已设为 ${selected.provider}/${selected.model}。主任务模型不变；下次命名生效，用 /remote name auto 可立即重试。`,
+        "info",
+      );
+    } catch {
+      ctx.ui.notify(
+        "命名模型配置读取或保存失败，请检查 pi-tab-title.json 的格式及目录权限；未切换主任务模型，也未发起命名请求。",
+        "warning",
+      );
+    }
+  }
+
+  function renameCommand(args: string, ctx: ExtensionCommandContext) {
+    if (!active) return;
+    const value = args.trim();
+    if (!value) {
+      ctx.ui.notify(
+        `当前会话名：${state?.title || "未命名"}。用 /remote name 名称，或 /remote name auto。`,
+        "info",
+      );
+      return;
+    }
+    if (value === "auto") {
+      if (controller) {
+        ctx.ui.notify("会话名正在生成中。可用 /remote name 名称直接指定。", "info");
+        return;
+      }
+      const prompt = firstUserPrompt(ctx);
+      if (!prompt.trim()) {
+        ctx.ui.notify("还没有可用于命名的首条用户文本。可直接 /remote name 名称。", "warning");
+        return;
+      }
+      void generate(ctx, prompt);
+      return;
+    }
+    rename(value, "command", ctx);
+    ctx.ui.notify(`会话名已设为「${value}」`, "info");
+  }
+
+  /** "/remote name [名称|auto|model …|off]"；不带参数时打开菜单。 */
+  async function nameCommand(args: string, ctx: ExtensionCommandContext) {
+    const value = args.trim();
+    const [head = ""] = value.split(/\s+/);
+    if (head === "model") return modelCommand(value.slice(head.length), ctx);
+    if (value === "off") return modelCommand("off", ctx);
+    if (value) return renameCommand(value, ctx);
+    if (!active) return ctx.ui.notify("会话命名仅支持终端会话。", "warning");
+    let model = "";
+    try {
+      const current = readNamingModel();
+      if (current.provider) model = `${current.provider}/${current.model}`;
+    } catch {
+      /* Shown as not enabled; choosing a model repairs the config. */
+    }
+    const title = `会话命名 · ${model ? `模型 ${model}` : "未开启（手机列表显示首条输入）"} · 当前「${state?.title || "未命名"}」`;
+    const options = model
+      ? ["重命名当前会话 rename", "按首条输入重新生成 auto", "更换命名模型 model", "关闭自动命名 off"]
+      : ["选择命名模型并开启 model", "重命名当前会话 rename"];
+    const choice = await ctx.ui.select(title, options);
+    if (!choice || !active) return;
+    const action = choice.split(" ").at(-1);
+    if (action === "model") return modelCommand("", ctx);
+    if (action === "off") return modelCommand("off", ctx);
+    if (action === "auto") return renameCommand("auto", ctx);
+    // From the menu, any text (even "auto") is the new name.
+    const name = (await ctx.ui.input("新的会话名", state?.title))?.trim();
+    if (!name || !active) return;
+    rename(name, "command", ctx);
+    ctx.ui.notify(`会话名已设为「${name}」`, "info");
+  }
+
+  pi.registerCommand("tabmodel", {
+    description: "已并入 /remote name model，下个版本移除",
+    handler: async (args, ctx) => {
+      ctx.ui.notify("/tabmodel 已并入 /remote name model，下个版本移除。", "warning");
+      await modelCommand(args, ctx);
     },
   });
 
   pi.registerCommand("tabname", {
-    description: "标签命名：/tabname 名称；/tabname auto 用选定模型按首条输入重新生成一次",
+    description: "已并入 /remote name，下个版本移除",
     handler: async (args, ctx) => {
-      if (!active) return;
-      const value = args.trim();
-      if (!value) {
-        ctx.ui.notify(
-          `当前标签：${state?.title || "未命名"}。用 /tabname 名称，或 /tabname auto。`,
-          "info",
-        );
-        return;
-      }
-      if (value === "auto") {
-        if (controller) {
-          ctx.ui.notify("标签正在生成中。可用 /tabname 名称直接指定。", "info");
-          return;
-        }
-        const prompt = firstUserPrompt(ctx);
-        if (!prompt.trim()) {
-          ctx.ui.notify("还没有可用于命名的首条用户文本。可直接 /tabname 名称。", "warning");
-          return;
-        }
-        void generate(ctx, prompt);
-        return;
-      }
-      const title = value;
-      if (!title) {
-        ctx.ui.notify("标题不能为空或仅含控制字符。", "warning");
-        return;
-      }
-      rename(title, "command", ctx);
-      ctx.ui.notify(`标签已设为「${title}」`, "info");
+      ctx.ui.notify("/tabname 已并入 /remote name，下个版本移除。", "warning");
+      renameCommand(args, ctx);
     },
   });
 
@@ -649,4 +703,5 @@ export default function (pi: ExtensionAPI) {
       };
     },
   });
+  return { nameCommand };
 }
