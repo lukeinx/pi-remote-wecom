@@ -44,7 +44,7 @@ pi install "$PWD"
 
 The UI and bot replies are currently primarily in Chinese. English command aliases are supported.
 
-**Optional naming:** run `/remote name` to choose a naming model. New sessions are named from their first input; `/remote name off` disables this. Without a naming model, no naming request is made and the session list uses the first input.
+**Automatic naming:** new sessions are named from their first input, using Pi's global default model (`defaultProvider`/`defaultModel` in `settings.json`) unless you choose a separate naming model with `/remote name model`; a lightweight model is recommended. `/remote name off` disables naming. When naming is off or Pi has no default model, no naming request is made and the session list uses the first input.
 
 ## Commands
 
@@ -74,7 +74,7 @@ In Pi:
 |---|---|
 | `/remote` | View connection status and manage the daemon |
 | `/remote setup` | Configure the bot |
-| `/remote name` | Session naming: `model` chooses the naming model, `off` disables it, `auto` regenerates, any other text renames |
+| `/remote name` | Session naming: `model` chooses the naming model (`model default` follows Pi's default model), `off` disables it, `auto` regenerates, any other text renames |
 | `/remote alias` | Manage directory aliases |
 | `/remote bind` | Bind or rebind your WeCom account |
 | `/remote restart` / `/remote stop` | Start or restart / stop the daemon |

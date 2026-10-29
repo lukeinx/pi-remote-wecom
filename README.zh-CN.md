@@ -44,7 +44,7 @@ pi install "$PWD"
 2. 在 Pi 中执行 `/reload`，再执行 `/remote setup`，填写 BotID 和 Secret，Pi 会显示 6 位绑定码。
 3. 在企微单聊机器人发送绑定码，收到「绑定成功」卡片后，点 **活跃会话** 即可开始聊天。
 
-**自动命名**：手机靠会话名挑选会话。执行 `/remote name` 选一个命名模型后，每个新会话会根据首条输入生成短标题，同步到终端标签和手机；不选则不命名、不耗 token，列表显示首条输入。
+**自动命名**：手机靠会话名挑选会话。每个新会话会根据首条输入生成短标题，同步到终端标签和手机。默认用 Pi 全局默认模型（`settings.json` 的 `defaultProvider`/`defaultModel`）起名，建议用 `/remote name model` 换成轻量模型；`/remote name off` 关闭。关闭或 Pi 没有默认模型时不命名、不耗 token，列表显示首条输入。
 
 ## 常用命令
 
@@ -76,7 +76,7 @@ pi install "$PWD"
 |---|---|
 | `/remote` | 查看状态与管理服务 |
 | `/remote setup` | 配置机器人 |
-| `/remote name` | 会话命名：`model` 选择自动命名模型，`off` 关闭，`auto` 重新生成，直接跟名称则手动改名 |
+| `/remote name` | 会话命名：`model` 选择自动命名模型（`model default` 跟随 Pi 默认模型），`off` 关闭，`auto` 重新生成，直接跟名称则手动改名 |
 | `/remote alias` | 设置常用目录别名 |
 | `/remote bind` | 重新绑定企微账号 |
 | `/remote restart` / `/remote stop` | 启动或重启 / 停止服务 |

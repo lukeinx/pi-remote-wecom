@@ -2723,12 +2723,21 @@ async function finishCreate(t, msg, media, ack, note = "") {
     }
     return buildCreatedCard(t, note);
 }
-// 后台会话同样由随包命名模块命名；未开命名或未选命名模型时不等会话名。
+// 后台会话同样由随包命名模块命名；未选命名模型时用 Pi 全局默认模型，关闭命名或两者都没有时不等会话名。
 function backgroundNaming() {
     if (!CFG.tabTitleEnabled)
         return false;
+    const read = name => JSON.parse(fs.readFileSync(path.join(CFG.agentDir, name), "utf8"));
     try {
-        return !!JSON.parse(fs.readFileSync(path.join(CFG.agentDir, "pi-tab-title.json"), "utf8")).provider;
+        return !!read("pi-tab-title.json").provider;
+    }
+    catch (error) {
+        if (error?.code !== "ENOENT")
+            return false;
+    }
+    try {
+        const settings = read("settings.json");
+        return typeof settings.defaultProvider === "string" && !!settings.defaultProvider && typeof settings.defaultModel === "string" && !!settings.defaultModel;
     }
     catch {
         return false;

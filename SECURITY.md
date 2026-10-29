@@ -7,7 +7,7 @@ This extension allows the bound WeCom account to operate local Pi sessions with 
 - Credentials and tokens are stored locally with restrictive permissions. The setup Secret input is not masked. Reset the bot Secret and rerun setup if it may have been disclosed.
 - Background RPC and terminal sessions have the same permissions: installed extensions load, and file writes and shell commands are not restricted. Treat the bound WeCom account like local access to Pi.
 - During phone-initiated tasks, extension confirmations are forwarded to WeCom. With the default `remoteConfirm: "ask-then-allow"`, an unanswered confirmation is approved after `remoteConfirmTimeoutMs`; `allow` approves without asking. Use `ask` if extensions such as computer control must never proceed unattended.
-- Prompts and attachments are sent to the model configured for the selected Pi session. Optional naming sends up to 1,000 characters of the first input to the selected naming model.
+- Prompts and attachments are sent to the model configured for the selected Pi session. Unless disabled with `/remote name off`, naming sends up to 500 characters of the first input to the naming model (Pi's default model unless another one is chosen).
 - Logs, received files, and results are retained locally and may contain private information. Redact them before sharing and clean up files as needed.
 - Outbound delivery retries can produce duplicates if an acknowledgement is lost. An incoming message recorded before a daemon crash is not automatically replayed. Check session state before resending work.
 
@@ -24,7 +24,7 @@ Report vulnerabilities privately to the repository maintainer. If a private repo
 - Bot Secret 只保存于本机配置；运行目录默认 700，凭证与 token 默认 600。不要提交运行目录、日志、会话文件、附件或结果。
 - 后台会话与终端会话权限相同：加载已安装扩展，不限制写文件与 shell 命令。绑定的企微账号应视同本机操作 Pi 的权限。
 - 手机发起的任务中，扩展的确认请求会转到企微。默认 `remoteConfirm: "ask-then-allow"` 在 `remoteConfirmTimeoutMs` 内无人处理时自动允许；`allow` 直接允许。若电脑控制等扩展不允许在无人值守时继续，请改为 `ask`。
-- 用户文字、附件和命令会交给所选 Pi 模型处理；启用自动命名后，首条输入最多 1000 字符会发给所选命名模型。请使用适合所处理数据的模型服务。
+- 用户文字、附件和命令会交给所选 Pi 模型处理；未用 `/remote name off` 关闭自动命名时，首条输入最多 500 字符会发给命名模型（未单独选择时为 Pi 默认模型）。请使用适合所处理数据的模型服务。
 - 收件文件、结果和日志默认保留；日志可能包含目录、会话名、部分输入与错误信息。分享排障材料前应自行脱敏。
 - 首次配置界面的 Secret 输入不遮罩。凭证疑似泄露时，在企微机器人管理端重置 Secret，再运行 `/remote setup`；需要撤销本机 token 时先停止 daemon，删除运行目录的 `.token` 后重启并在 Pi 执行 `/reload`。
 

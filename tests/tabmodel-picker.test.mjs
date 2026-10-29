@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {existsSync,readFileSync,writeFileSync} from 'node:fs';
+import {existsSync,readFileSync,rmSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {initTheme} from '@earendil-works/pi-coding-agent';
 import extension,{nameCompletions} from '../vendor/tab-title/index.ts';
@@ -50,8 +50,8 @@ test('升级前保存的命名模型原样出现在 /remote name 菜单里，off
  await hooks.session_start({},ctx);
  await naming.nameCommand('',ctx);
  assert.match(title,/模型 p\/light/);
- assert.deepEqual(options.map(o=>o.split(' ').at(-1)),['rename','auto','model','off']);
- assert.equal(existsSync(join(agentDir,'pi-tab-title.json')),false);
+ assert.deepEqual(options.map(o=>o.split(' ').at(-1)),['rename','auto','model','default','off']);
+ assert.deepEqual(saved(),{version:1,enabled:false});
  await hooks.session_shutdown({},ctx);
 });
 test('/remote name 菜单改名：输入什么就用什么，包括 auto',async()=>{
@@ -65,9 +65,27 @@ test('/remote name 菜单改名：输入什么就用什么，包括 auto',async(
  assert.deepEqual(names,['auto','手动名称']);
  await hooks.session_shutdown({},ctx);
 });
+test('关闭后菜单可改回跟随默认模型',async(t)=>{
+ const settings=join(agentDir,'settings.json');
+ writeFileSync(settings,JSON.stringify({defaultProvider:'p',defaultModel:'big'}));
+ writeFileSync(join(agentDir,'pi-tab-title.json'),JSON.stringify({version:1,enabled:false}));
+ t.after(()=>rmSync(settings,{force:true}));
+ const titles=[],notes=[];let options;
+ const {hooks,ctx,naming}=setup({select:async(t,o)=>{titles.push(t);options=o;return titles.length===1?o[0]:undefined;},notify:m=>notes.push(m)},'tui');
+ await hooks.session_start({},ctx);
+ await naming.nameCommand('',ctx);
+ assert.match(titles[0],/已关闭/);
+ assert.deepEqual(options.map(o=>o.split(' ').at(-1)),['default','model','rename']);
+ assert.equal(existsSync(join(agentDir,'pi-tab-title.json')),false);
+ assert.match(notes.at(-1),/跟随默认模型 p\/big/);
+ await naming.nameCommand('',ctx);
+ assert.match(titles[1],/模型 p\/big（跟随默认模型）/);
+ assert.deepEqual(options.map(o=>o.split(' ').at(-1)),['rename','auto','model','off']);
+ await hooks.session_shutdown({},ctx);
+});
 test('/remote name 补全',()=>{
  assert.deepEqual(nameCompletions('').map(i=>i.value),['model','auto','off']);
- assert.deepEqual(nameCompletions('model ').map(i=>i.value),['model current','model show']);
+ assert.deepEqual(nameCompletions('model ').map(i=>i.value),['model current','model default','model show']);
  assert.deepEqual(nameCompletions('model c').map(i=>i.value),['model current']);
  assert.deepEqual(nameCompletions('foo bar'),[]);
 });

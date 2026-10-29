@@ -1,6 +1,7 @@
 /**
  * One-shot Chinese terminal titles from the first prompt, parallel to the main agent.
- * /remote name model selects a separate naming model; /remote name NAME renames; /remote name auto retries.
+ * Names with Pi's default model unless /remote name model selects a separate one or /remote name off disables it;
+ * /remote name NAME renames; /remote name auto retries.
  * /tabmodel and /tabname remain as deprecated aliases for one release.
  * Three runtime icons: animated braille while running, × on failure, · on completion.
  * Uses public extension APIs only. Timer animates the title; no polling or raw terminal writes.
@@ -11,6 +12,7 @@ import { join } from "node:path";
 import {
   getAgentDir,
   ModelSelectorComponent,
+  SettingsManager,
   type ExtensionAPI,
   type ExtensionCommandContext,
   type ExtensionContext,
@@ -25,9 +27,10 @@ const MODEL_UNAVAILABLE = "Title model unavailable";
 /** pi-remote 在终端等待后台会话结束时置位：此时会话文件仍由后台进程写入，这里不能追加条目。 */
 const HANDOFF_WAITING = Symbol.for("pi-remote-wecom.handoff-waiting");
 const DEFAULT_TITLE = "π";
-const DEFAULT_NAMING_MODEL = { provider: "", model: "" };
 const CONFIG_FILE = "pi-tab-title.json";
 type NamingModel = { provider: string; model: string };
+/** custom: chosen with /remote name model; default: no config, follows Pi's global default; off: disabled. */
+type NamingPreference = NamingModel & { source: "custom" | "default" | "off" };
 
 /** Split only the first slash: OpenRouter and local models may have slash-containing IDs. */
 export function parseModelSpec(value: string): NamingModel | undefined {
@@ -36,15 +39,26 @@ export function parseModelSpec(value: string): NamingModel | undefined {
   return { provider: value.slice(0, slash), model: value.slice(slash + 1) };
 }
 
-function readNamingModel(): NamingModel {
+function defaultNamingModel(): NamingPreference {
+  const settings = SettingsManager.create(process.cwd(), getAgentDir()).getGlobalSettings();
+  const { defaultProvider: provider, defaultModel: model } = settings;
+  const spec =
+    typeof provider === "string" && !provider.includes("/") && typeof model === "string"
+      ? parseModelSpec(`${provider}/${model}`)
+      : undefined;
+  return { ...(spec ?? { provider: "", model: "" }), source: "default" };
+}
+
+function readNamingModel(): NamingPreference {
   let raw: string;
   try {
     raw = readFileSync(join(getAgentDir(), CONFIG_FILE), "utf8");
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { ...DEFAULT_NAMING_MODEL };
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return defaultNamingModel();
     throw error;
   }
   const data = JSON.parse(raw);
+  if (data?.version === 1 && data.enabled === false) return { provider: "", model: "", source: "off" };
   if (
     data?.version !== 1 ||
     typeof data.provider !== "string" ||
@@ -54,7 +68,13 @@ function readNamingModel(): NamingModel {
   ) {
     throw new Error("Invalid naming model configuration");
   }
-  return { provider: data.provider, model: data.model };
+  return { provider: data.provider, model: data.model, source: "custom" };
+}
+
+function namingLabel(preference: NamingPreference): string {
+  if (!preference.provider) return preference.source === "off" ? "已关闭" : "未开启";
+  const spec = `${preference.provider}/${preference.model}`;
+  return preference.source === "default" ? `${spec}（跟随默认模型）` : spec;
 }
 
 type TitleModel = { reasoning?: boolean; thinkingLevelMap?: Partial<Record<string, string | null>> };
@@ -69,7 +89,7 @@ export function titleMaxTokens(model: TitleModel): number {
   return light ? 1024 : 2048;
 }
 
-/** Whether automatic naming is armed for new sessions (a naming model has been chosen). */
+/** Whether automatic naming is armed for new sessions (a naming model is chosen or Pi has a default model). */
 export function namingEnabled(): boolean {
   try {
     return !!readNamingModel().provider;
@@ -84,6 +104,7 @@ export function nameCompletions(prefix: string) {
   if (model)
     return [
       { value: "model current", label: "current", description: "固定为当前主模型" },
+      { value: "model default", label: "default", description: "跟随 Pi 默认模型" },
       { value: "model show", label: "show", description: "查看命名模型" },
     ].filter((i) => i.label.startsWith(model[1]));
   if (/\s/.test(prefix)) return [];
@@ -131,7 +152,7 @@ async function pickNamingModel(
   });
 }
 
-function writeNamingModel(model: NamingModel) {
+function writeNamingModel(model: NamingModel | { enabled: false }) {
   const dir = getAgentDir();
   const path = join(dir, CONFIG_FILE);
   const temp = `${path}.${randomUUID()}.tmp`;
@@ -264,8 +285,10 @@ export default function (pi: ExtensionAPI) {
   async function requestTitle(ctx: ExtensionContext, prompt: string, signal: AbortSignal) {
     // Read for every new request so other tabs' saved selections take effect too.
     const preference = readNamingModel();
-    const model = ctx.modelRegistry.find(preference.provider, preference.model);
-    // Never fall back to the main model or another provider on invalid/unavailable selection.
+    const model = preference.provider
+      ? ctx.modelRegistry.find(preference.provider, preference.model)
+      : undefined;
+    // An unavailable chosen or default model never falls back to the main model or another provider.
     if (!model) throw new Error(MODEL_UNAVAILABLE);
     const request = ctx.modelRegistry.complete(
       model,
@@ -509,27 +532,42 @@ export default function (pi: ExtensionAPI) {
       if (value === "show") {
         const current = readNamingModel();
         ctx.ui.notify(
-          `命名模型：${current.provider ? `${current.provider}/${current.model}` : "未设置"}（全局；不跟随主任务模型）。配置：${join(getAgentDir(), CONFIG_FILE)}`,
+          `命名模型：${namingLabel(current)}（全局；不跟随当前会话切换的模型）。配置：${join(getAgentDir(), CONFIG_FILE)}`,
           "info",
         );
         return;
       }
       if (value === "current") {
         if (ctx.model) selected = { provider: ctx.model.provider, model: ctx.model.id };
-      } else if (value === "reset" || value === "off") {
-        rmSync(join(getAgentDir(), CONFIG_FILE), { force: true });
+      } else if (value === "off") {
+        writeNamingModel({ enabled: false });
         cancel();
         armed = false;
         ctx.ui.notify("已关闭自动命名；/remote name model 可重新选择模型。", "info");
+        return;
+      } else if (value === "default" || value === "reset") {
+        rmSync(join(getAgentDir(), CONFIG_FILE), { force: true });
+        const preference = readNamingModel();
+        if (!state && !firstUserPrompt(ctx)) armed = !!preference.provider;
+        if (controller) {
+          cancel();
+          save({ version: 1, status: "skipped", title: state?.title, source: "auto" });
+        }
+        ctx.ui.notify(
+          preference.provider
+            ? `命名模型已改为跟随默认模型 ${preference.provider}/${preference.model}；下次命名生效。`
+            : "已改为跟随默认模型，但 Pi 未设置默认模型（settings.json 的 defaultProvider/defaultModel），暂不自动命名。",
+          "info",
+        );
         return;
       } else if (value) {
         selected = parseModelSpec(value);
       } else {
         let currentLabel = "未能读取配置";
-        let current: NamingModel | undefined;
+        let current: NamingPreference | undefined;
         try {
           current = readNamingModel();
-          currentLabel = current.provider ? `${current.provider}/${current.model}` : "未设置";
+          currentLabel = namingLabel(current);
         } catch {
           /* Allow the picker to repair an invalid config explicitly. */
         }
@@ -559,7 +597,7 @@ export default function (pi: ExtensionAPI) {
       }
       if (!selected) {
         ctx.ui.notify(
-          "用法：/remote name model 选择，或 /remote name model provider/model-id；current 固定当前主模型，show 查看；/remote name off 关闭自动命名。",
+          "用法：/remote name model 选择，或 /remote name model provider/model-id；current 固定当前主模型，default 跟随 Pi 默认模型，show 查看；/remote name off 关闭自动命名。",
           "warning",
         );
         return;
@@ -629,22 +667,35 @@ export default function (pi: ExtensionAPI) {
     if (value === "off") return modelCommand("off", ctx);
     if (value) return renameCommand(value, ctx);
     if (!active) return ctx.ui.notify("会话命名仅支持终端会话。", "warning");
-    let model = "";
+    let current: NamingPreference | undefined;
     try {
-      const current = readNamingModel();
-      if (current.provider) model = `${current.provider}/${current.model}`;
+      current = readNamingModel();
     } catch {
       /* Shown as not enabled; choosing a model repairs the config. */
     }
-    const title = `会话命名 · ${model ? `模型 ${model}` : "未开启（手机列表显示首条输入）"} · 当前「${state?.title || "未命名"}」`;
-    const options = model
-      ? ["重命名当前会话 rename", "按首条输入重新生成 auto", "更换命名模型 model", "关闭自动命名 off"]
-      : ["选择命名模型并开启 model", "重命名当前会话 rename"];
+    const status = current?.provider
+      ? `模型 ${namingLabel(current)}`
+      : `${current ? namingLabel(current) : "未开启"}（手机列表显示首条输入）`;
+    const title = `会话命名 · ${status} · 当前「${state?.title || "未命名"}」`;
+    const options = current?.provider
+      ? [
+          "重命名当前会话 rename",
+          "按首条输入重新生成 auto",
+          "更换命名模型 model",
+          ...(current.source === "custom" ? ["改为跟随默认模型 default"] : []),
+          "关闭自动命名 off",
+        ]
+      : [
+          ...(current?.source === "off" && defaultNamingModel().provider ? ["用默认模型开启 default"] : []),
+          "选择命名模型并开启 model",
+          "重命名当前会话 rename",
+        ];
     const choice = await ctx.ui.select(title, options);
     if (!choice || !active) return;
     const action = choice.split(" ").at(-1);
     if (action === "model") return modelCommand("", ctx);
     if (action === "off") return modelCommand("off", ctx);
+    if (action === "default") return modelCommand("default", ctx);
     if (action === "auto") return renameCommand("auto", ctx);
     // From the menu, any text (even "auto") is the new name.
     const name = (await ctx.ui.input("新的会话名", state?.title))?.trim();
