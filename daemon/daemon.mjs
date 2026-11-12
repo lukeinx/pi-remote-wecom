@@ -1298,9 +1298,10 @@ function optText(t) {
         bits.push("← 当前");
     return bits.join(" · ");
 }
-const selOpt = (t) => ({
+const selOpt = (t, held = null) => ({
     id: registerPick({
         act: "sel",
+        held,
         targetKey: t.key,
         sessionFile: t.sessionFile,
         cwd: t.cwd,
@@ -2837,8 +2838,13 @@ async function applyPick(pick, rows) {
         return fail();
     if (t.failed)
         return t.failed;
-    bindCurrent(t);
-    return buildSelectedCard(t);
+    const flushed = bindCurrent(t);
+    if (!pick.held)
+        return buildSelectedCard(t);
+    if (flushed)
+        return plainText({ head: "📥 已切换", subject: t.label(), body: "待答的问题已推送，请在卡片上作答。这条消息没有投递，需要的话请重发。" });
+    log(`未绑定时暂存的消息 → 绑定 ${t.key} 后投递`);
+    return deliverWithMedia(t, pick.held.raw, pick.held.media, null);
 }
 async function buildSelectedCard(t) {
     if (t.kind === "rpc") {
@@ -2915,10 +2921,12 @@ async function handleCardCallback({ taskId, optionId, optionIds = [] }) {
     }
     const again = PICK_AGAIN[pick?.act];
     if (!pick || pick.taskId !== taskId || Date.now() - pick.at > CARD_TTL_MS) {
+        if (pick?.held)
+            return "这张卡片已失效，消息未投递，请重发。";
         return again ? `这张${again[0]}卡片已失效，请发送 \`${again[1]}\` 重新选择。` : "这张会话卡片已失效，请发送 `活跃会话` 或 `历史会话` 重新选择。";
     }
     if (consumeTask(taskId))
-        return again ? `这张卡片已经提交过，请发送 \`${again[1]}\` 获取新卡片。` : "这张卡片已经提交过，请发送 `活跃会话` 或 `历史会话` 获取新卡片。";
+        return pick.held ? "这张卡片已经提交过。" : again ? `这张卡片已经提交过，请发送 \`${again[1]}\` 获取新卡片。` : "这张卡片已经提交过，请发送 `活跃会话` 或 `历史会话` 获取新卡片。";
     if (pick.act === "model")
         return handleModelPick(pick);
     if (pick.act === "think")
@@ -2997,21 +3005,22 @@ async function handleCommand(text, media = [], ack = { media: false }, { quote =
                     foot: "发送 `创建会话` 新建，或 `历史会话` 找回会话",
                 });
             }
-            if (media.length) {
-                log(`未绑定会话，${media.length} 个附件随正文一同未投递（已回报 mediaAccepted=false）`);
-            }
-            const options = live.slice(0, VOTE_OPT_MAX).map((x) => selOpt(x));
+            const held = { raw, media };
+            if (media.length)
+                ack.media = true;
+            const options = live.slice(0, VOTE_OPT_MAX).map((x) => selOpt(x, held));
+            const content = [raw ? clipWidth(raw, 40) : "", media.length ? `（${media.length} 个附件）` : ""].join("");
             const card = {
                 card_type: "vote_interaction",
-                title: clip("⚠️ 发给哪个会话？", 26),
-                desc: "消息未投递 · 请先选择会话，再重发",
+                title: clip("✉️ 发给哪个会话？", 26),
+                desc: `未绑定会话，选择后投递 · 消息内容：${content}`,
                 options,
                 mode: 0,
-                submit_text: "绑定会话",
+                submit_text: "发送",
                 task_id: taskId("bind"),
             };
-            log(`未绑定会话，退回选择卡（活跃 ${live.length} 个），原文未投递`);
-            return cardBlock(card, "**消息未投递，请先选择会话**", () => renderList(live, rows, "消息未投递"));
+            log(`未绑定会话，暂存消息并退回选择卡（活跃 ${live.length} 个），待选择`);
+            return cardBlock(card, "**消息未投递，请选择会话**", () => renderList(live, rows, "消息未投递"));
         }
         if (quoted?.missed) {
             const live = [...targets.values()].filter((x) => liveTarget(x) && x !== t).sort((a, b) => b.lastActivity - a.lastActivity);
@@ -3594,8 +3603,7 @@ async function handleHttp(req, res) {
     return json(res, 404, { error: "not found" });
 }
 transport = new WeComTransport({ config: CFG, dir: DIR, log,
-    onMessage: handleCommand, onCard: handleCardCallback, onBind: saveOwner,
-    isBusy: () => [...targets.values()].some((t) => t.busy) });
+    onMessage: handleCommand, onCard: handleCardCallback, onBind: saveOwner });
 server.on("error", error => { log(`监听失败 ${error.code}`); transport.stop(); process.exit(1); });
 server.listen(PORT, HOST, () => {
     transport.start();

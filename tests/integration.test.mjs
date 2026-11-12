@@ -101,12 +101,25 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
     return id;
   };
   const cardSelect = card => socket.send(JSON.stringify({cmd:'aibot_event_callback',headers:{req_id:`card-${++seq}`},body:{msgid:`card-${seq}`,aibotid:'test-bot',chattype:'single',from:{userid:'owner'},msgtype:'event',event:{eventtype:'template_card_event',template_card_event:{task_id:card.task_id,selected_items:{selected_item:[{question_key:card.task_id,option_ids:{option_id:[card.checkbox.option_list.find(o=>o.text.includes('会话A')).id]}}]}}}}}));
-  message('ls'); const card = await until(()=>sent.find(x=>x.msgtype==='template_card')?.template_card);
+  // Unbound: the message is held on the session card and delivered once a session is picked.
+  const unbound=(await api('/command',{text:'未绑定时发的'})).reply.card;
+  assert.equal(unbound.title,'✉️ 发给哪个会话？'); assert.match(unbound.desc,/选择后投递 · 消息内容：未绑定时发的/);
+  const pickUnbound=()=>socket.send(JSON.stringify({cmd:'aibot_event_callback',headers:{req_id:`card-${++seq}`},body:{msgid:`card-${seq}`,aibotid:'test-bot',chattype:'single',from:{userid:'owner'},msgtype:'event',event:{eventtype:'template_card_event',template_card_event:{task_id:unbound.task_id,selected_items:{selected_item:[{question_key:unbound.task_id,option_ids:{option_id:[unbound.options.find(o=>o.text.includes('会话A')).id]}}]}}}}}));
+  pickUnbound();
+  assert.ok(await until(async()=>(await api(`/poll?key=${a.key}`)).messages?.find(m=>m.text==='未绑定时发的')));
+  assert.equal((await api('/health')).current,a.key);
+  await api('/turn',{key:a.key,runId:'u-A1',local:false,prompt:'未绑定时发的'});
+  await api('/result',{key:a.key,runId:'u-A1',text:'未绑定投递结果'});
+  await until(()=>sent.some(x=>x.markdown?.content.includes('未绑定投递结果')));
+  pickUnbound();
+  await until(()=>sent.some(x=>x.markdown?.content.includes('这张卡片已经提交过。')));
+  const mark=sent.length;
+  message('ls'); const card = await until(()=>sent.slice(mark).find(x=>x.msgtype==='template_card')?.template_card);
   assert.equal(card.checkbox.option_list.length,2);
   assert.equal(card.main_title.desc,'活跃 2 个 · 发「历史会话」查询历史'); cardSelect(card);
   await until(async()=>(await api('/health')).current===a.key);
-  await until(()=>sent.some(x=>x.template_card?.main_title?.title.includes('选择会话')));
-  const selectedCard=sent.find(x=>x.template_card?.main_title?.title.includes('选择会话')).template_card;
+  await until(()=>sent.slice(mark).some(x=>x.template_card?.main_title?.title.includes('选择会话')));
+  const selectedCard=sent.slice(mark).find(x=>x.template_card?.main_title?.title.includes('选择会话')).template_card;
   assert.equal(selectedCard.emphasis_content.title,'会话A');
   assert.deepEqual(selectedCard.horizontal_content_list.map(x=>x.keyname),['目录','类型','模型','上下文']);
   assert.equal(selectedCard.horizontal_content_list.find(x=>x.keyname==='上下文').value,'9.8% / 1.0m');

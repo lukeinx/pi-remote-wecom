@@ -7,7 +7,6 @@ export const CONFIG_FILE = path.join(RUN_DIR, 'config.json');
 export const WELCOME_FILE = 'welcome.json'; // 已发送主动欢迎的标记
 export const RESTART_FILE = 'restart.json'; // 待通知的重启标记：优雅退出前写入，下次连上后消费一次
 export const RESTART_NOTICE_TTL_MS = 10 * 60 * 1000; // 停止后长期未启动则不再通知
-export const WELCOME_QUIET_MS = 2 * 60 * 1000; // 刚给主人发过消息时，进会话不再回欢迎语
 export const BIND_FILE = 'bind.json'; // 待绑定的一次性绑定码
 export const BIND_TTL_MS = 10 * 60 * 1000;
 export const BIND_MAX_FAILURES = 5;
